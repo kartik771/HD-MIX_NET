@@ -1,0 +1,106 @@
+# Models/Components/res2net.py
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class Res2NetBlock(nn.Module):
+    """
+    Res2Net-style bottleneck block.
+
+    Args:
+        in_channels:  input channels
+        out_channels: output channels
+        scale:        number of channel splits (>=2)
+        stride:       spatial stride for downsampling
+        expansion:    bottleneck expansion factor
+    """
+    def __init__(self, in_channels, out_channels, scale=4, stride=1, expansion=4):
+        super(Res2NetBlock, self).__init__()
+
+        assert scale >= 2, "scale must be >= 2"
+        self.scale = scale
+        self.stride = stride
+        self.expansion = expansion
+
+        # width of each split
+        width = out_channels // expansion
+        self.width = width
+
+        # 1x1 conv for channel expansion/compression
+        # NOTE: we apply stride here so all splits have the same spatial size
+        self.conv1 = nn.Conv2d(
+            in_channels,
+            width * scale,
+            kernel_size=1,
+            stride=stride,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(width * scale)
+
+        # 3x3 convs for scale-1 splits
+        self.convs = nn.ModuleList()
+        self.bns = nn.ModuleList()
+        for _ in range(scale - 1):
+            self.convs.append(
+                nn.Conv2d(width, width, kernel_size=3, stride=1, padding=1, bias=False)
+            )
+            self.bns.append(nn.BatchNorm2d(width))
+
+        # 1x1 conv to expand back to out_channels
+        self.conv3 = nn.Conv2d(width * scale, out_channels, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels)
+
+        # optional downsample for the residual path
+        self.downsample = None
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(
+                    in_channels,
+                    out_channels,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                ),
+                nn.BatchNorm2d(out_channels),
+            )
+
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        residual = x
+
+        # 1x1 conv (with possible stride) -> all splits same spatial size
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        # split along channels: list of length `scale`, each [B, width, H', W']
+        spx = torch.split(out, self.width, dim=1)
+
+        y = []
+        for i in range(self.scale):
+            if i == 0:
+                # first split bypasses 3x3 conv (as in Res2Net)
+                sp = spx[0]
+            else:
+                # hierarchical residual connection across splits
+                sp = spx[i] + y[i - 1]
+                sp = self.convs[i - 1](sp)
+                sp = self.bns[i - 1](sp)
+                sp = self.relu(sp)
+            y.append(sp)
+
+        # concatenate all processed splits
+        out = torch.cat(y, dim=1)  # [B, width*scale, H', W']
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+
+        return out

@@ -1,0 +1,109 @@
+# Utils/metrics.py
+
+import torch
+import numpy as np
+from scipy.ndimage import distance_transform_edt
+
+
+def _maybe_sigmoid_tensor(output, from_logits=None):
+    if not isinstance(output, torch.Tensor):
+        output = torch.as_tensor(output).float()
+    else:
+        output = output.float()
+
+    if from_logits is None:
+        min_val = float(output.min().item())
+        max_val = float(output.max().item())
+        from_logits = min_val < 0.0 or max_val > 1.0
+
+    if from_logits:
+        output = torch.sigmoid(output)
+
+    return output
+
+
+def _to_binary_prediction(output, threshold=0.5, from_logits=None):
+    output = _maybe_sigmoid_tensor(output, from_logits=from_logits).detach().cpu()
+    return (output > threshold).numpy().astype(np.int32)
+
+
+def _to_binary_target(target):
+    if isinstance(target, torch.Tensor):
+        target = target.detach().cpu().float()
+    else:
+        target = torch.as_tensor(target).float()
+    return (target > 0.5).numpy().astype(np.int32)
+
+
+def dice_coef_torch(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
+    output = _maybe_sigmoid_tensor(output, from_logits=from_logits)
+    output = (output > threshold).float()
+    target = (target > 0.5).float()
+
+    reduce_dims = tuple(range(1, output.ndim))
+    intersection = (output * target).sum(dim=reduce_dims)
+    denominator = output.sum(dim=reduce_dims) + target.sum(dim=reduce_dims)
+    dice = (2.0 * intersection + smooth) / (denominator + smooth)
+    return float(dice.mean().item())
+
+
+def dice_coef(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
+    output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits)
+    target = _to_binary_target(target)
+
+    intersection = (output * target).sum()
+    return float((2.0 * intersection + smooth) /
+                 (output.sum() + target.sum() + smooth))
+
+
+def iou_score(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
+    output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits)
+    target = _to_binary_target(target)
+
+    intersection = (output * target).sum()
+    union = output.sum() + target.sum() - intersection
+
+    return float((intersection + smooth) / (union + smooth))
+
+
+def hausdorff_95(output, target, threshold=0.5, from_logits=None) -> float:
+    output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits).astype(bool)
+    target = _to_binary_target(target).astype(bool)
+
+    # batch size as integer
+    batch_size = output.shape[0]
+
+    hd95_sum = 0.0
+    valid_samples = 0
+
+    for i in range(batch_size):
+        pred = output[i]
+        gt = target[i]
+
+        if pred.ndim == 3 and pred.shape[0] == 1:
+            pred = pred[0]
+        if gt.ndim == 3 and gt.shape[0] == 1:
+            gt = gt[0]
+
+        if not np.any(pred) or not np.any(gt):
+            continue
+
+        d_pred_to_gt = distance_transform_edt(1 - gt)[pred]
+        d_gt_to_pred = distance_transform_edt(1 - pred)[gt]
+
+        if d_pred_to_gt.size == 0 or d_gt_to_pred.size == 0:
+            continue
+
+        hd95_pred = np.percentile(d_pred_to_gt, 95)
+        hd95_gt = np.percentile(d_gt_to_pred, 95)
+
+        hd95_sample = max(hd95_pred, hd95_gt)
+
+        hd95_sum += hd95_sample
+        valid_samples += 1
+
+    if valid_samples == 0:
+        return 0.0
+
+    return float(hd95_sum / valid_samples)
+
