@@ -17,7 +17,7 @@ from Utils.dataset import KvasirDataset
 from Utils.inference import predict_probabilities, probabilities_to_mask
 from Utils.transformers import get_transforms
 from Utils.losses import JointLoss
-from Utils.metrics import dice_coef_torch, hausdorff_95
+from Utils.metrics import dice_coef_torch, hausdorff_95, iou_score
 
 
 def seed_everything(seed):
@@ -275,7 +275,7 @@ def train():
             )
             continue
 
-        val_dice, val_hd95, val_threshold = validate(
+        val_dice, val_iou, val_hd95, val_threshold = validate(
             model,
             val_loader,
             config,
@@ -289,7 +289,7 @@ def train():
         print(
             f"Epoch {epoch + 1} | "
             f"Train Loss: {train_loss / len(train_loader):.4f} | "
-            f"Val Dice: {val_dice:.4f} | Val HD95: {hd95_display} | "
+            f"Val Dice: {val_dice:.4f} | Val IOU: {val_iou:.4f} | Val HD95: {hd95_display} | "
             f"Val Thr: {val_threshold:.2f}"
         )
 
@@ -337,31 +337,36 @@ def validate(model, loader, config, compute_hd95=True):
             all_masks.append(masks)
 
     best_dice = -1.0
+    best_iou = -1.0
     best_threshold = config.DEFAULT_THRESHOLD
 
     for threshold in config.THRESHOLD_CANDIDATES:
         dice_score = 0.0
+        iou_sum = 0.0
 
         for probs, masks in zip(all_probs, all_masks):
             pred_mask = probabilities_to_mask(probs, threshold, config=config)
             dice_score += dice_coef_torch(pred_mask, masks, threshold=0.5, from_logits=False)
+            iou_sum += iou_score(pred_mask, masks, from_logits=False)
 
         mean_dice = dice_score / len(all_probs)
+        mean_iou = iou_sum / len(all_probs)
 
         if mean_dice > best_dice:
             best_dice = mean_dice
+            best_iou = mean_iou
             best_threshold = threshold
 
     hd_score = 0.0
     if not compute_hd95:
-        return best_dice, None, best_threshold
+        return best_dice, best_iou, None, best_threshold
 
     for probs, masks in zip(all_probs, all_masks):
         pred_mask = probabilities_to_mask(probs, best_threshold, config=config)
         hd_score += hausdorff_95(pred_mask, masks, from_logits=False)
 
     best_hd95 = hd_score / len(all_probs)
-    return best_dice, best_hd95, best_threshold
+    return best_dice, best_iou, best_hd95, best_threshold
 
 
 if __name__ == "__main__":

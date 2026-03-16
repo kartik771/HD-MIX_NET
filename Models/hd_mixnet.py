@@ -89,6 +89,8 @@ class HD_MixNet(nn.Module):
 
         self.use_grad_checkpointing = bool(getattr(config, 'USE_GRAD_CHECKPOINTING', False))
         self.input_multiple = window_size * 8
+        self.store_layer_outputs = bool(getattr(config, 'STORE_LAYER_OUTPUTS', False))
+        self.layer_outputs = {}
 
         if embed_dim % heads_stage1 != 0:
             raise ValueError(
@@ -192,15 +194,26 @@ class HD_MixNet(nn.Module):
         x, orig_size = self._pad_input(x)
 
         x_c0 = self.cnn_stem(x)
+        if self.store_layer_outputs: self.layer_outputs['cnn_stem'] = x_c0.detach()
+
         x_c1 = self._forward_with_checkpoint(self.res2net1, x_c0)
+        if self.store_layer_outputs: self.layer_outputs['res2net1'] = x_c1.detach()
+
         edge1 = self._forward_with_checkpoint(self.ed1, x_c1)
+        if self.store_layer_outputs: self.layer_outputs['edge_detect1'] = edge1.detach()
 
         x_c2 = self._forward_with_checkpoint(self.res2net2, x_c1)
+        if self.store_layer_outputs: self.layer_outputs['res2net2'] = x_c2.detach()
+
         edge2 = self._forward_with_checkpoint(self.ed2, x_c2)
+        if self.store_layer_outputs: self.layer_outputs['edge_detect2'] = edge2.detach()
 
         x_c3 = self._forward_with_checkpoint(self.res2net3, x_c2)
+        if self.store_layer_outputs: self.layer_outputs['res2net3'] = x_c3.detach()
 
         x_s0 = self.patch_embed(x)
+        if self.store_layer_outputs: self.layer_outputs['patch_embed'] = x_s0.detach()
+
         b, c, h, w = x_s0.shape
         x_s0_flat = x_s0.flatten(2).transpose(1, 2)
 
@@ -209,32 +222,50 @@ class HD_MixNet(nn.Module):
             x_s0_flat,
         )
         x_s1 = x_s1_flat.transpose(1, 2).reshape(b, c, h, w)
+        if self.store_layer_outputs: self.layer_outputs['swin1'] = x_s1.detach()
 
         x_s2_in = self.patch_merge(x_s1)
+        if self.store_layer_outputs: self.layer_outputs['patch_merge'] = x_s2_in.detach()
+
         b2, c2, h2, w2 = x_s2_in.shape
         x_s2_flat = self._forward_with_checkpoint(
             lambda inp: self.swin3(inp, h2, w2),
             x_s2_in.flatten(2).transpose(1, 2),
         )
         x_s2 = x_s2_flat.transpose(1, 2).reshape(b2, c2, h2, w2)
+        if self.store_layer_outputs: self.layer_outputs['swin3'] = x_s2.detach()
 
         fused_mid = self._forward_with_checkpoint(self.bamf1, x_c2, x_s1, edge2)
+        if self.store_layer_outputs: self.layer_outputs['bamf1_fused_mid'] = fused_mid.detach()
+
         fused_deep = self._forward_with_checkpoint(
             lambda cnn_feat, trans_feat: self.bamf2(cnn_feat, trans_feat, None),
             x_c3,
             x_s2,
         )
+        if self.store_layer_outputs: self.layer_outputs['bamf2_before_context'] = fused_deep.detach()
+
         fused_deep = self._forward_with_checkpoint(self.context, fused_deep)
+        if self.store_layer_outputs: self.layer_outputs['context_block'] = fused_deep.detach()
 
         d1 = self._forward_with_checkpoint(self.dec1, fused_deep, fused_mid)
+        if self.store_layer_outputs: self.layer_outputs['decoder1'] = d1.detach()
+
         d2 = self._forward_with_checkpoint(self.dec2, d1, x_c1)
+        if self.store_layer_outputs: self.layer_outputs['decoder2'] = d2.detach()
 
         final_feat = self._forward_with_checkpoint(self.be_block, d2, edge1)
+        if self.store_layer_outputs: self.layer_outputs['boundary_enhance'] = final_feat.detach()
 
         seg_out = self.final_conv(final_feat)
+        if self.store_layer_outputs: self.layer_outputs['seg_out'] = seg_out.detach()
+
         edge_out = self.edge_out_conv(final_feat)
+        if self.store_layer_outputs: self.layer_outputs['edge_out'] = edge_out.detach()
+
         aux_out = self.aux_out_conv(d1)
         aux_out = F.interpolate(aux_out, size=seg_out.shape[2:], mode='bilinear', align_corners=False)
+        if self.store_layer_outputs: self.layer_outputs['aux_out'] = aux_out.detach()
 
         seg_out = self._crop_to_size(seg_out, orig_size)
         edge_out = self._crop_to_size(edge_out, orig_size)

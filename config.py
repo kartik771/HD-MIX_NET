@@ -59,8 +59,8 @@ class Config:
     LAMBDA_STRUCT = 1.0
     LAMBDA_DICE = 0.4
     LAMBDA_BCE = 0.2
-    LAMBDA_BOUNDARY = 0.25
-    LAMBDA_HD = 0.0
+    LAMBDA_BOUNDARY = 0.40
+    LAMBDA_HD = 0.08
     LAMBDA_EDGE = 0.15
     LAMBDA_AUX = 0.35
     STRUCTURE_POOL_KERNEL = 31
@@ -70,12 +70,20 @@ class Config:
 
     # Validation / Inference
     DEFAULT_THRESHOLD = 0.45
-    THRESHOLD_CANDIDATES = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65)
-    USE_TTA = True
+    THRESHOLD_CANDIDATES = (0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
+    USE_TTA = False
     VAL_USE_TTA = False
     USE_POST_PROCESSING = True
     POST_PROCESS_KERNEL = 5
     KEEP_LARGEST_COMPONENT = True
     MIN_COMPONENT_AREA_RATIO = 0.001
     VALIDATE_EVERY = 1
-    HD95_EVERY = 4
+    HD95_EVERY = 1
+
+    # Inference Speed/Quality Trade-offs
+    INFERENCE_IMG_SIZE = 384
+    INFERENCE_BATCH_SIZE = 1
+    USE_INFERENCE_TTA = False
+
+    # Layer Output Storage (for visualization & debugging)
+    STORE_LAYER_OUTPUTS = False
