@@ -1,4 +1,3 @@
-# train.py
 import os
 import random
 import math
@@ -10,6 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
+import json
 
 from config import Config
 from Models.hd_mixnet import HD_MixNet
@@ -19,7 +19,6 @@ from Utils.transformers import get_transforms
 from Utils.losses import JointLoss
 from Utils.metrics import dice_coef_torch, hausdorff_95, iou_score
 
-
 def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -28,13 +27,11 @@ def seed_everything(seed):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.benchmark = True
 
-
 def enable_speedups(config):
     torch.set_float32_matmul_precision("high")
     if config.DEVICE.type == 'cuda':
         torch.backends.cuda.matmul.allow_tf32 = config.USE_TF32
         torch.backends.cudnn.allow_tf32 = config.USE_TF32
-
 
 def split_sample_ids(sample_ids, val_split, seed):
     generator = torch.Generator().manual_seed(seed)
@@ -46,7 +43,6 @@ def split_sample_ids(sample_ids, val_split, seed):
     val_ids = [sample_ids[idx] for idx in shuffled_indices[:val_size]]
     train_ids = [sample_ids[idx] for idx in shuffled_indices[val_size:]]
     return train_ids, val_ids
-
 
 def estimate_pos_weight(mask_dir, samples, min_value, max_value):
     foreground_pixels = 0.0
@@ -69,7 +65,6 @@ def estimate_pos_weight(mask_dir, samples, min_value, max_value):
     pos_weight = background_pixels / max(foreground_pixels, 1.0)
     return float(np.clip(pos_weight, min_value, max_value))
 
-
 def save_checkpoint(path, model, epoch, dice, hd95, threshold):
     torch.save(
         {
@@ -81,7 +76,6 @@ def save_checkpoint(path, model, epoch, dice, hd95, threshold):
         },
         path,
     )
-
 
 def build_scheduler(optimizer, config):
     def lr_lambda(epoch_idx):
@@ -99,16 +93,13 @@ def build_scheduler(optimizer, config):
 
     return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-
 def train():
-    # 1. Setup
     config = Config()
     seed_everything(config.SEED)
     enable_speedups(config)
     if not os.path.exists('./checkpoints'):
         os.makedirs('./checkpoints')
 
-    # 2. Data Preparation
     base_dataset = KvasirDataset(
         img_dir=config.TRAIN_IMG_DIR,
         mask_dir=config.TRAIN_MASK_DIR,
@@ -159,7 +150,6 @@ def train():
         **loader_kwargs,
     )
 
-    # 3. Model & Optimization
     model = HD_MixNet(num_classes=config.NUM_CLASSES, config=config).to(config.DEVICE)
     if config.USE_CHANNELS_LAST:
         model = model.to(memory_format=torch.channels_last)
@@ -185,7 +175,16 @@ def train():
     last_hd95 = float('nan')
     last_threshold = config.DEFAULT_THRESHOLD
 
-    # 4. Training Loop
+    metrics_history = {
+        "epochs": [],
+        "train_loss": [],
+        "val_dice": [],
+        "val_iou": [],
+        "val_hd95": [],
+        "val_threshold": [],
+        "learning_rate": [],
+    }
+
     print(f"Start training HD-MixNet on {config.DEVICE} for {config.NUM_EPOCHS} epochs...")
     print(f"CUDA available: {torch.cuda.is_available()}")
     print(f"Train/Val split: {len(train_ds)} / {len(val_ds)}")
@@ -246,7 +245,6 @@ def train():
             train_loss += total_loss.item()
             pbar.set_postfix({'loss': train_loss / (batch_idx + 1)})
 
-            # Debug only once
             if epoch == 0 and batch_idx == 0:
                 print("DEBUG train mask unique values:", torch.unique(masks))
                 print("DEBUG images device:", images.device)
@@ -255,7 +253,6 @@ def train():
 
         scheduler.step()
 
-        # 5. Validation
         should_validate = (
             epoch == 0 or
             (epoch + 1) % config.VALIDATE_EVERY == 0 or
@@ -293,7 +290,17 @@ def train():
             f"Val Thr: {val_threshold:.2f}"
         )
 
-        # Save Best Models
+        metrics_history["epochs"].append(epoch + 1)
+        metrics_history["train_loss"].append(float(train_loss / len(train_loader)))
+        metrics_history["val_dice"].append(float(val_dice))
+        metrics_history["val_iou"].append(float(val_iou))
+        metrics_history["val_hd95"].append(float(val_hd95) if val_hd95 is not None else None)
+        metrics_history["val_threshold"].append(float(val_threshold))
+        metrics_history["learning_rate"].append(float(optimizer.param_groups[0]['lr']))
+
+        with open('./checkpoints/metrics_history.json', 'w') as f:
+            json.dump(metrics_history, f, indent=2)
+
         if val_dice > best_dice:
             best_dice = val_dice
             save_checkpoint(
@@ -318,11 +325,7 @@ def train():
             )
             print(">>> Saved Best HD95 Model")
 
-
 def validate(model, loader, config, compute_hd95=True):
-    """
-    Keep threshold search on GPU and compute HD95 only once with the best threshold.
-    """
     model.eval()
     all_probs = []
     all_masks = []
@@ -367,7 +370,6 @@ def validate(model, loader, config, compute_hd95=True):
 
     best_hd95 = hd_score / len(all_probs)
     return best_dice, best_iou, best_hd95, best_threshold
-
 
 if __name__ == "__main__":
     train()

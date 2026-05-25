@@ -3,16 +3,8 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 
-
 class KvasirDataset(Dataset):
     def __init__(self, img_dir, mask_dir, transforms=None, file_names=None):
-        """
-        Args:
-            img_dir (str): Path to 'images' folder
-            mask_dir (str): Path to 'masks' folder
-            transforms (albumentations.Compose): Augmentation pipeline
-            file_names (list[str] | None): Optional subset of sample ids / names
-        """
         self.img_dir = img_dir
         self.mask_dir = mask_dir
         self.transforms = transforms
@@ -65,10 +57,6 @@ class KvasirDataset(Dataset):
         return len(self.samples)
 
     def _safe_read(self, img_path, mask_path):
-        """
-        Safely load image and mask.
-        If loading fails, return None.
-        """
         image = cv2.imread(img_path)
 
         if image is None:
@@ -87,7 +75,6 @@ class KvasirDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        # Loop until a valid sample is found
         while True:
 
             img_name, mask_name = self.samples[idx]
@@ -98,13 +85,11 @@ class KvasirDataset(Dataset):
             image, mask = self._safe_read(img_path, mask_path)
 
             if image is None or mask is None:
-                # Move to next index if corrupted
                 idx = (idx + 1) % len(self.samples)
                 continue
 
             break
 
-        # Binarize mask (0 or 255 -> 0 or 1)
         _, mask = cv2.threshold(mask, 127, 1, cv2.THRESH_BINARY)
 
         if self.transforms:
@@ -112,13 +97,11 @@ class KvasirDataset(Dataset):
             image = augmented["image"]
             mask = augmented["mask"]
 
-        # Convert image to tensor
         if not isinstance(image, torch.Tensor):
             image = torch.from_numpy(image).permute(2, 0, 1).float()
         else:
             image = image.float()
 
-        # Convert mask to tensor
         if not isinstance(mask, torch.Tensor):
             mask = torch.from_numpy(mask).float()
         else:

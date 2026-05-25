@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from scipy.ndimage import binary_fill_holes
 
-
 def predict_probabilities(model, images, use_tta=False):
     outputs = model(images)
     logits = outputs[0] if isinstance(outputs, (tuple, list)) else outputs
@@ -20,7 +19,6 @@ def predict_probabilities(model, images, use_tta=False):
         probs.append(torch.flip(aug_probs, dims=flip_dims))
 
     return torch.stack(probs, dim=0).mean(dim=0)
-
 
 def post_process_mask(
     pred_mask,
@@ -61,7 +59,6 @@ def post_process_mask(
         return torch.from_numpy(processed).float().to(device)
     return processed.astype(np.float32)
 
-
 def probabilities_to_mask(probs, threshold, config=None):
     pred_mask = (probs > threshold).float()
     if config is None or not getattr(config, 'USE_POST_PROCESSING', False):
@@ -73,7 +70,6 @@ def probabilities_to_mask(probs, threshold, config=None):
         keep_largest_component=getattr(config, 'KEEP_LARGEST_COMPONENT', True),
         min_component_area_ratio=getattr(config, 'MIN_COMPONENT_AREA_RATIO', 0.001),
     )
-
 
 def load_checkpoint(model, checkpoint_path, device, strict=True):
     checkpoint = torch.load(checkpoint_path, map_location=device)

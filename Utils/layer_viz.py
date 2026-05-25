@@ -5,16 +5,7 @@ import numpy as np
 import os
 from pathlib import Path
 
-
 class LayerOutputVisualizer:
-    """Visualize and save intermediate layer outputs from HD_MixNet."""
-
-    def __init__(self, output_dir='./layer_visualizations'):
-        self.output_dir = output_dir
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    def _normalize_tensor(self, tensor):
-        """Normalize tensor to [0, 1] for visualization."""
         t_min = tensor.min()
         t_max = tensor.max()
         if t_max - t_min > 1e-6:
@@ -22,17 +13,6 @@ class LayerOutputVisualizer:
         return tensor
 
     def _save_single_channel(self, tensor, name, layer_name):
-        """Save single channel as heatmap."""
-        t_norm = self._normalize_tensor(tensor)
-        heatmap = (t_norm * 255).astype(np.uint8)
-        heatmap_colored = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-
-        path = os.path.join(self.output_dir, f"{layer_name}_{name}.png")
-        cv2.imwrite(path, heatmap_colored)
-        return path
-
-    def _save_multi_channel(self, tensor, name, layer_name, max_channels=16):
-        """Save multi-channel as grid of heatmaps."""
         num_channels = min(tensor.shape[0], max_channels)
         cols = min(4, num_channels)
         rows = (num_channels + cols - 1) // cols
@@ -54,13 +34,6 @@ class LayerOutputVisualizer:
         return path
 
     def visualize_layer_outputs(self, layer_outputs, image=None):
-        """
-        Visualize all layer outputs from model.layer_outputs dict.
-
-        Args:
-            layer_outputs: Dict from model.layer_outputs (after forward pass)
-            image: Original input image (optional, for overlay)
-        """
         print(f"\n{'='*70}")
         print("LAYER OUTPUT VISUALIZATION")
         print(f"{'='*70}\n")
@@ -69,22 +42,18 @@ class LayerOutputVisualizer:
             if not isinstance(tensor, torch.Tensor):
                 continue
 
-            # Move to CPU and convert to numpy
             if tensor.is_cuda:
                 tensor = tensor.cpu()
 
-            tensor_np = tensor.squeeze(0).numpy()  # Remove batch dimension
+            tensor_np = tensor.squeeze(0).numpy()
 
             print(f"Layer: {layer_name:25} | Shape: {tensor_np.shape}", end="")
 
-            # Handle different tensor shapes
             if len(tensor_np.shape) == 2:
-                # Single channel (H, W)
                 path = self._save_single_channel(tensor_np, "viz", layer_name)
                 print(f" → Saved: {Path(path).name}")
 
             elif len(tensor_np.shape) == 3:
-                # Multi-channel (C, H, W)
                 channels = tensor_np.shape[0]
                 print(f" ({channels} channels)", end="")
 
@@ -100,24 +69,6 @@ class LayerOutputVisualizer:
         print(f"\nVisualizations saved to: {os.path.abspath(self.output_dir)}\n")
 
     def print_layer_shapes(self, layer_outputs):
-        """Print summary of all layer shapes."""
-        print(f"\n{'='*70}")
-        print("LAYER SHAPES SUMMARY")
-        print(f"{'='*70}\n")
-        print(f"{'Layer Name':<30} {'Shape':<20} {'Parameters':<15}")
-        print("-" * 70)
-
-        for layer_name, tensor in sorted(layer_outputs.items()):
-            if isinstance(tensor, torch.Tensor):
-                shape_str = str(tuple(tensor.shape))
-                num_params = tensor.numel()
-                param_str = f"{num_params/1e6:.2f}M" if num_params > 1e6 else f"{num_params/1e3:.2f}K"
-                print(f"{layer_name:<30} {shape_str:<20} {param_str:<15}")
-
-        print()
-
-    def save_layer_statistics(self, layer_outputs, filename='layer_stats.txt'):
-        """Save detailed statistics of all layers."""
         stats_file = os.path.join(self.output_dir, filename)
 
         with open(stats_file, 'w') as f:
@@ -145,16 +96,9 @@ class LayerOutputVisualizer:
 
         print(f"Statistics saved to: {stats_file}\n")
 
-
 def print_forward_flow(config):
-    """Print the forward pass flow for reference."""
-    print(f"\n{'='*80}")
-    print("HD_MixNet FORWARD PASS FLOW")
-    print(f"{'='*80}\n")
-
-    flow = """
 INPUT: (B, 3, 384, 384) Image
-    ↓
+    
 [CNN STREAM]                          [TRANSFORMER STREAM]
 ├─ cnn_stem                           ├─ patch_embed
 │  (B, 48, 384, 384)                 │  (B, 96, 96, 96)
@@ -169,7 +113,7 @@ INPUT: (B, 3, 384, 384) Image
 │                                     │  (B, 192, 48, 48)
 ├─ res2net3                           │
 │  (B, 192, 96, 96)                  │
-    ↓
+    
 FUSION LAYERS
 ├─ bamf1 (boundary-aware mix fusion)
 │  CNN: (B, 96, 192, 192)
@@ -184,7 +128,7 @@ FUSION LAYERS
 │
 └─ context (pyramid context block)
    Output: (B, 192, 96, 96)
-    ↓
+    
 DECODER (Upsampling)
 ├─ decoder1 (2x upsample + skip)
 │  Output: (B, 96, 192, 192)
@@ -194,21 +138,8 @@ DECODER (Upsampling)
 │
 └─ boundary_enhance
    Output: (B, 48, 384, 384)
-    ↓
+    
 OUTPUT HEADS
 ├─ seg_out: (B, 1, 384, 384) ← Main segmentation
 ├─ edge_out: (B, 1, 384, 384) ← Edge map
 └─ aux_out: (B, 1, 384, 384) ← Auxiliary output
-"""
-    print(flow)
-    print(f"{'='*80}\n")
-
-
-if __name__ == "__main__":
-    print("Layer Output Visualizer Module")
-    print("Usage:")
-    print("  from Utils.layer_viz import LayerOutputVisualizer")
-    print("  viz = LayerOutputVisualizer()")
-    print("  viz.visualize_layer_outputs(model.layer_outputs)")
-    print("  viz.print_layer_shapes(model.layer_outputs)")
-    print("  viz.save_layer_statistics(model.layer_outputs)")

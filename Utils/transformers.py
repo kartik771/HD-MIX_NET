@@ -1,8 +1,6 @@
-# Utils/transformers.py
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import cv2
-
 
 def get_transforms(phase: str, img_size: int = 256):
     base_transforms = [

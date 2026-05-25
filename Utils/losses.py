@@ -1,10 +1,8 @@
-# Utils/losses.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from scipy.ndimage import distance_transform_edt as eucl_dist
-
 
 class HausdorffDTLoss(nn.Module):
 
@@ -14,22 +12,21 @@ class HausdorffDTLoss(nn.Module):
         self.debug = debug
 
     def forward(self, pred, target):
-        pred_prob = torch.sigmoid(pred)  # probabilities in [0,1]
+        pred_prob = torch.sigmoid(pred)
 
         batch_size = pred_prob.shape[0]
         loss = 0.0
 
         for b in range(batch_size):
-            p_b = pred_prob[b, 0]   # (H,W)
-            t_b = target[b, 0]      # (H,W)
+            p_b = pred_prob[b, 0]
+            t_b = target[b, 0]
 
             with torch.no_grad():
                 gt_np = t_b.detach().cpu().numpy().astype(np.uint8)
 
-                d_fg = eucl_dist(gt_np)        # distance inside GT
-                d_bg = eucl_dist(1 - gt_np)    # distance outside GT
+                d_fg = eucl_dist(gt_np)
+                d_bg = eucl_dist(1 - gt_np)
 
-                # Normalize distances to [0,1] to keep scale stable
                 if d_fg.max() > 0:
                     d_fg = d_fg / (d_fg.max() + 1e-6)
                 if d_bg.max() > 0:
@@ -38,16 +35,13 @@ class HausdorffDTLoss(nn.Module):
                 w_bg = torch.from_numpy(d_bg ** self.alpha).float().to(pred.device)
                 w_fg = torch.from_numpy(d_fg ** self.alpha).float().to(pred.device)
 
-            # False positives (pred high where GT is background)
             term_fp = p_b * w_bg
 
-            # False negatives (pred low where GT is foreground)
             term_fn = (1.0 - p_b) * w_fg
 
             loss += (term_fp.mean() + term_fn.mean())
 
         return loss / batch_size
-
 
 class DiceLoss(nn.Module):
     def __init__(self, smooth=1e-5):
@@ -55,22 +49,13 @@ class DiceLoss(nn.Module):
         self.smooth = smooth
 
     def forward(self, pred, target):
-        """
-        pred:   logits (B,1,H,W)
-        target: binary mask (B,1,H,W)
-        """
         pred = torch.sigmoid(pred)
         intersection = (pred * target).sum(dim=(2, 3))
         union = pred.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
         dice = 2.0 * (intersection + self.smooth) / (union + self.smooth)
         return 1.0 - dice.mean()
 
-
 class StructureLoss(nn.Module):
-    """
-    Boundary-aware structure loss popular in polyp segmentation.
-    Combines weighted BCE and weighted IoU so uncertain boundaries matter more.
-    """
     def __init__(self, pool_kernel=31, pos_weight=None):
         super().__init__()
         self.pool_kernel = pool_kernel
@@ -101,11 +86,7 @@ class StructureLoss(nn.Module):
 
         return (wbce + wiou).mean()
 
-
 class BoundaryLoss(nn.Module):
-    """
-    Lightweight differentiable boundary alignment loss.
-    """
     def __init__(self, kernel_size=5, smooth=1e-5):
         super().__init__()
         self.kernel_size = kernel_size
@@ -125,7 +106,6 @@ class BoundaryLoss(nn.Module):
         union = pred_boundary.sum(dim=(2, 3)) + target_boundary.sum(dim=(2, 3))
         boundary_dice = (2.0 * intersection + self.smooth) / (union + self.smooth)
         return 1.0 - boundary_dice.mean()
-
 
 class JointLoss(nn.Module):
 

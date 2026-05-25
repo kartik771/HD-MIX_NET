@@ -1,4 +1,3 @@
-# evaluate.py
 import torch
 from torch.utils.data import DataLoader
 from Models.hd_mixnet import HD_MixNet
@@ -15,7 +14,6 @@ def evaluate(model_path, use_tta=False, batch_size=None, img_size=None):
         batch_size = config.INFERENCE_BATCH_SIZE
     if img_size is None:
         img_size = config.INFERENCE_IMG_SIZE
-
 
     model = HD_MixNet(num_classes=config.NUM_CLASSES, config=config).to(config.DEVICE)
     checkpoint_meta = load_checkpoint(model, model_path, config.DEVICE)
@@ -42,11 +40,9 @@ def evaluate(model_path, use_tta=False, batch_size=None, img_size=None):
             image = image.to(config.DEVICE)
             mask = mask.to(config.DEVICE)
 
-            # Inference
             pred_prob = predict_probabilities(model, image, use_tta=use_tta)
             pred = probabilities_to_mask(pred_prob, threshold, config=config)
 
-            # Metrics
             dc = dice_coef(pred, mask, from_logits=False)
             iou = iou_score(pred, mask, from_logits=False)
             hd = hausdorff_95(pred, mask, from_logits=False)
@@ -76,4 +72,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     evaluate(args.path, use_tta=args.use_tta, batch_size=args.batch_size, img_size=args.img_size)
-

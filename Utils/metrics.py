@@ -1,9 +1,7 @@
-# Utils/metrics.py
 
 import torch
 import numpy as np
 from scipy.ndimage import distance_transform_edt
-
 
 def _maybe_sigmoid_tensor(output, from_logits=None):
     if not isinstance(output, torch.Tensor):
@@ -21,11 +19,9 @@ def _maybe_sigmoid_tensor(output, from_logits=None):
 
     return output
 
-
 def _to_binary_prediction(output, threshold=0.5, from_logits=None):
     output = _maybe_sigmoid_tensor(output, from_logits=from_logits).detach().cpu()
     return (output > threshold).numpy().astype(np.int32)
-
 
 def _to_binary_target(target):
     if isinstance(target, torch.Tensor):
@@ -33,7 +29,6 @@ def _to_binary_target(target):
     else:
         target = torch.as_tensor(target).float()
     return (target > 0.5).numpy().astype(np.int32)
-
 
 def dice_coef_torch(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
     output = _maybe_sigmoid_tensor(output, from_logits=from_logits)
@@ -46,7 +41,6 @@ def dice_coef_torch(output, target, smooth: float = 1e-5, threshold=0.5, from_lo
     dice = (2.0 * intersection + smooth) / (denominator + smooth)
     return float(dice.mean().item())
 
-
 def dice_coef(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
     output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits)
     target = _to_binary_target(target)
@@ -54,7 +48,6 @@ def dice_coef(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=N
     intersection = (output * target).sum()
     return float((2.0 * intersection + smooth) /
                  (output.sum() + target.sum() + smooth))
-
 
 def iou_score(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=None) -> float:
     output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits)
@@ -65,12 +58,10 @@ def iou_score(output, target, smooth: float = 1e-5, threshold=0.5, from_logits=N
 
     return float((intersection + smooth) / (union + smooth))
 
-
 def hausdorff_95(output, target, threshold=0.5, from_logits=None) -> float:
     output = _to_binary_prediction(output, threshold=threshold, from_logits=from_logits).astype(bool)
     target = _to_binary_target(target).astype(bool)
 
-    # batch size as integer
     batch_size = output.shape[0]
 
     hd95_sum = 0.0
@@ -106,4 +97,3 @@ def hausdorff_95(output, target, threshold=0.5, from_logits=None) -> float:
         return 0.0
 
     return float(hd95_sum / valid_samples)
-

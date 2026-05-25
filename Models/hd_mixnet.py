@@ -1,4 +1,3 @@
-# Models/hd_mixnet.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,12 +14,7 @@ from Models.Components.layers import (
     SqueezeExcite,
 )
 
-
 class BoundaryAwareMixFusion(nn.Module):
-    """
-    Fuse local CNN features and global Transformer features while
-    letting edge evidence tilt the mixture toward sharper local detail.
-    """
     def __init__(self, cnn_dim, trans_dim, out_dim, edge_dim=None):
         super().__init__()
         self.conv_cnn = ConvBNAct(cnn_dim, out_dim, kernel_size=1, padding=0)
@@ -69,7 +63,6 @@ class BoundaryAwareMixFusion(nn.Module):
             fused = fused * (1.0 + edge_weight) + c * edge_weight
 
         return self.refine(fused) + c
-
 
 class HD_MixNet(nn.Module):
     def __init__(self, num_classes=1, img_size=224, config=None):

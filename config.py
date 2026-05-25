@@ -14,76 +14,99 @@ class Config:
     HIGH_VRAM_PROFILE = torch.cuda.is_available() and GPU_VRAM_GB >= 14.0
     MID_VRAM_PROFILE = torch.cuda.is_available() and 8.0 <= GPU_VRAM_GB < 14.0
 
-    # System
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     SEED = 42
-    NUM_WORKERS = min(2, CPU_COUNT)
+    NUM_WORKERS = min(4, CPU_COUNT)
     PIN_MEMORY = DEVICE.type == 'cuda'
     NON_BLOCKING = DEVICE.type == 'cuda'
     USE_AMP = DEVICE.type == 'cuda'
     USE_TF32 = DEVICE.type == 'cuda'
     USE_CHANNELS_LAST = DEVICE.type == 'cuda'
     USE_GRAD_CHECKPOINTING = DEVICE.type == 'cuda'
-    PREFETCH_FACTOR = 1
+    PREFETCH_FACTOR = 2
 
-    # Data Paths
     DATA_ROOT = os.environ.get('KVASIR_DATA_ROOT', './Data/Kvasir')
     TRAIN_IMG_DIR = os.path.join(DATA_ROOT, 'images')
     TRAIN_MASK_DIR = os.path.join(DATA_ROOT, 'masks')
 
-    # Training Hyperparams
     VAL_SPLIT = 0.2
-    IMG_SIZE = 384 if HIGH_VRAM_PROFILE else (320 if MID_VRAM_PROFILE else 256)
-    BATCH_SIZE = 2 if DEVICE.type == 'cuda' else 1
-    ACCUMULATION_STEPS = 2 if DEVICE.type == 'cuda' else 1
-    LEARNING_RATE = 3e-4
-    MIN_LEARNING_RATE = 1e-6
-    NUM_EPOCHS = 120
-    WARMUP_EPOCHS = 8
-    WEIGHT_DECAY = 1e-4
-    GRAD_CLIP_NORM = 1.0
+    IMG_SIZE = 384 if HIGH_VRAM_PROFILE else (384 if MID_VRAM_PROFILE else 384)
+    BATCH_SIZE = 4 if DEVICE.type == 'cuda' else 1
+    ACCUMULATION_STEPS = 4 if DEVICE.type == 'cuda' else 2
+    LEARNING_RATE = 5e-4
+    MIN_LEARNING_RATE = 5e-7
+    NUM_EPOCHS = 200
+    WARMUP_EPOCHS = 12
+    WEIGHT_DECAY = 2e-4
+    GRAD_CLIP_NORM = 0.5
 
-    # Model Hyperparams
     NUM_CLASSES = 1
     RES2NET_SCALE = 4
     SWIN_WINDOW_SIZE = 7
-    CNN_BASE_CHANNELS = 48 if HIGH_VRAM_PROFILE else 40
-    SWIN_EMBED_DIM = 96 if HIGH_VRAM_PROFILE else 72
-    SWIN_HEADS_STAGE1 = 4 if HIGH_VRAM_PROFILE else 3
-    SWIN_HEADS_STAGE2 = 8 if HIGH_VRAM_PROFILE else 6
-    SWIN_STAGE_DEPTHS = (2, 2)
+    CNN_BASE_CHANNELS = 64 if HIGH_VRAM_PROFILE else 56
+    SWIN_EMBED_DIM = 128 if HIGH_VRAM_PROFILE else 96
+    SWIN_HEADS_STAGE1 = 4 if HIGH_VRAM_PROFILE else 4
+    SWIN_HEADS_STAGE2 = 8 if HIGH_VRAM_PROFILE else 8
+    SWIN_STAGE_DEPTHS = (3, 3)
     SWIN_MLP_RATIO = 4.0
-    SWIN_DROP_PATH = 0.10
+    SWIN_DROP_PATH = 0.15
 
-    # Loss Weights
-    LAMBDA_STRUCT = 1.0
-    LAMBDA_DICE = 0.4
-    LAMBDA_BCE = 0.2
-    LAMBDA_BOUNDARY = 0.40
-    LAMBDA_HD = 0.08
-    LAMBDA_EDGE = 0.15
-    LAMBDA_AUX = 0.35
+    LAMBDA_STRUCT = 1.5
+    LAMBDA_DICE = 0.6
+    LAMBDA_BCE = 0.3
+    LAMBDA_BOUNDARY = 0.75
+    LAMBDA_HD = 0.20
+    LAMBDA_EDGE = 0.30
+    LAMBDA_AUX = 0.50
     STRUCTURE_POOL_KERNEL = 31
-    BOUNDARY_LOSS_KERNEL = 5
+    BOUNDARY_LOSS_KERNEL = 3
     MIN_BCE_POS_WEIGHT = 1.0
-    MAX_BCE_POS_WEIGHT = 6.0
+    MAX_BCE_POS_WEIGHT = 10.0
 
-    # Validation / Inference
-    DEFAULT_THRESHOLD = 0.45
-    THRESHOLD_CANDIDATES = (0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
-    USE_TTA = False
-    VAL_USE_TTA = False
+    DEFAULT_THRESHOLD = 0.48
+    THRESHOLD_CANDIDATES = tuple(round(x * 0.01, 2) for x in range(20, 81, 2))
+    USE_TTA = True
+    VAL_USE_TTA = True
     USE_POST_PROCESSING = True
-    POST_PROCESS_KERNEL = 5
+    POST_PROCESS_KERNEL = 7
     KEEP_LARGEST_COMPONENT = True
-    MIN_COMPONENT_AREA_RATIO = 0.001
+    MIN_COMPONENT_AREA_RATIO = 0.0005
     VALIDATE_EVERY = 1
     HD95_EVERY = 1
 
-    # Inference Speed/Quality Trade-offs
     INFERENCE_IMG_SIZE = 384
     INFERENCE_BATCH_SIZE = 1
-    USE_INFERENCE_TTA = False
+    USE_INFERENCE_TTA = True
 
-    # Layer Output Storage (for visualization & debugging)
     STORE_LAYER_OUTPUTS = False
+
+    USE_ADVANCED_AUGMENTATION = True
+    AUGMENTATION_STRENGTH = 0.8
+    ENABLE_CUTMIX = True
+    ENABLE_MIXUP = True
+    MIXUP_ALPHA = 0.3
+
+    USE_EMA = True
+    EMA_DECAY = 0.999
+
+    USE_CYCLIC_LR = True
+    CYCLE_LENGTH = 10
+
+    LABEL_SMOOTHING = 0.1
+
+    BACKBONE_DROPOUT = 0.3
+
+    USE_DEEPSPEED_PRECISION = False
+
+    ATTENTION_TEMPERATURE = 0.5
+
+    NUM_MODELS_ENSEMBLE = 3
+
+    EARLY_STOPPING_PATIENCE = 30
+    EARLY_STOPPING_METRIC = 'iou'
+
+    DICE_SMOOTH = 1e-4
+
+    USE_MULTI_SCALE_LOSS = True
+    SCALE_FACTORS = (1, 0.5, 0.25)
+
