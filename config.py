@@ -31,12 +31,12 @@ class Config:
 
     VAL_SPLIT = 0.2
     IMG_SIZE = 384 if HIGH_VRAM_PROFILE else (384 if MID_VRAM_PROFILE else 384)
-    BATCH_SIZE = 4 if DEVICE.type == 'cuda' else 1
+    BATCH_SIZE = 2 if DEVICE.type == 'cuda' else 1
     ACCUMULATION_STEPS = 4 if DEVICE.type == 'cuda' else 2
     LEARNING_RATE = 5e-4
     MIN_LEARNING_RATE = 5e-7
-    NUM_EPOCHS = 200
-    WARMUP_EPOCHS = 12
+    NUM_EPOCHS = 50
+    WARMUP_EPOCHS = 5
     WEIGHT_DECAY = 2e-4
     GRAD_CLIP_NORM = 0.5
 
