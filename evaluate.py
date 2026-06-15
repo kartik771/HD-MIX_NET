@@ -1,74 +1,191 @@
+# evaluate.py
+#
+# Adds:
+#   - per-image metrics collection + mean / std / 95% CI report
+#   - inference-time and FPS measurement (CPU or CUDA), with warmup
+#   - reads the checkpoint's recorded BRANCH_MODE / USE_BAMF / USE_EDGE_SUP
+#     and rebuilds the model with those flags so that ablation checkpoints
+#     load cleanly without manual config edits.
+#
+# Cross-dataset evaluation is in cross_dataset_eval.py.
+
+import argparse
+import os
+import time
+import math
+
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
+
 from Models.hd_mixnet import HD_MixNet
 from Utils.dataset import KvasirDataset
 from Utils.inference import load_checkpoint, predict_probabilities, probabilities_to_mask
 from Utils.transformers import get_transforms
 from Utils.metrics import dice_coef, iou_score, hausdorff_95
 from config import Config
-import argparse
 
-def evaluate(model_path, use_tta=False, batch_size=None, img_size=None):
-    config = Config()
-    if batch_size is None:
-        batch_size = config.INFERENCE_BATCH_SIZE
-    if img_size is None:
-        img_size = config.INFERENCE_IMG_SIZE
 
-    model = HD_MixNet(num_classes=config.NUM_CLASSES, config=config).to(config.DEVICE)
-    checkpoint_meta = load_checkpoint(model, model_path, config.DEVICE)
+def _apply_ablation_from_checkpoint(config, meta):
+    """If the checkpoint records ablation flags, mirror them into the Config
+    used to build the model. This avoids a class of frustrating bugs where
+    one trains a 'cnn_only' checkpoint and then loads it with the default
+    'both' config and a key-mismatch error appears."""
+    if not isinstance(meta, dict):
+        return
+    if 'branch_mode' in meta:
+        config.BRANCH_MODE = meta['branch_mode']
+    if 'use_bamf' in meta:
+        config.USE_BAMF = bool(meta['use_bamf'])
+    if 'use_edge_sup' in meta:
+        config.USE_EDGE_SUP = bool(meta['use_edge_sup'])
+
+
+def _ci95(values):
+    if len(values) <= 1:
+        return 0.0
+    a = np.asarray(values, dtype=np.float64)
+    sem = a.std(ddof=1) / math.sqrt(len(a))
+    # z=1.96 for 95% CI; using normal approximation since N is moderate.
+    return 1.96 * sem
+
+
+def measure_fps(model, config, n_warmup=10, n_iters=50):
+    """Time forward passes on a single image of the configured inference size."""
     model.eval()
-    threshold = float(checkpoint_meta.get('threshold', config.DEFAULT_THRESHOLD))
-
-    test_ds = KvasirDataset(
-        img_dir=config.TRAIN_IMG_DIR,
-        mask_dir=config.TRAIN_MASK_DIR,
-        transforms=get_transforms('test', img_size)
-    )
-
-    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
-
-    print(f"Evaluating model: {model_path} on {len(test_ds)} images...")
-    print(f"Using threshold={threshold:.2f}, TTA={'on' if use_tta else 'off'}, batch_size={batch_size}, img_size={img_size}")
-
-    avg_dice = 0.0
-    avg_iou = 0.0
-    avg_hd95 = 0.0
+    device = config.DEVICE
+    img_size = config.INFERENCE_IMG_SIZE
+    dummy = torch.randn(1, 3, img_size, img_size, device=device)
 
     with torch.no_grad():
-        for i, (image, mask) in enumerate(test_loader):
+        for _ in range(n_warmup):
+            _ = model(dummy)
+
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    start = time.perf_counter()
+    with torch.no_grad():
+        for _ in range(n_iters):
+            _ = model(dummy)
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
+    elapsed = time.perf_counter() - start
+
+    ms_per_img = (elapsed / n_iters) * 1000.0
+    fps = n_iters / elapsed
+    return {'ms_per_image': ms_per_img, 'fps': fps, 'n_iters': n_iters, 'device': str(device)}
+
+
+def evaluate(model_path, use_tta=False, batch_size=None, img_size=None, measure_speed=False,
+             img_dir=None, mask_dir=None):
+    config = Config()
+    if batch_size is not None:
+        config.INFERENCE_BATCH_SIZE = batch_size
+    if img_size is not None:
+        config.INFERENCE_IMG_SIZE = img_size
+    if img_dir is None:
+        img_dir = config.TRAIN_IMG_DIR
+    if mask_dir is None:
+        mask_dir = config.TRAIN_MASK_DIR
+
+    # Build model with default config flags, then patch flags from checkpoint
+    # metadata BEFORE constructing the network.
+    raw_meta = torch.load(model_path, map_location='cpu')
+    if isinstance(raw_meta, dict) and 'model_state_dict' in raw_meta:
+        _apply_ablation_from_checkpoint(config, raw_meta)
+
+    model = HD_MixNet(num_classes=config.NUM_CLASSES, config=config).to(config.DEVICE)
+    meta = load_checkpoint(model, model_path, config.DEVICE)
+    model.eval()
+    threshold = float(meta.get('threshold', config.DEFAULT_THRESHOLD))
+
+    ds = KvasirDataset(img_dir=img_dir, mask_dir=mask_dir,
+                       transforms=get_transforms('test', config.INFERENCE_IMG_SIZE))
+    loader = DataLoader(ds, batch_size=config.INFERENCE_BATCH_SIZE, shuffle=False)
+
+    print(f"Evaluating {model_path}")
+    print(f"  Branch mode: {getattr(config, 'BRANCH_MODE', 'both')}  "
+          f"BAMF: {config.USE_BAMF}  Edge sup: {config.USE_EDGE_SUP}")
+    print(f"  Dataset: {img_dir}  ({len(ds)} images)")
+    print(f"  threshold={threshold:.2f}  TTA={'on' if use_tta else 'off'}  "
+          f"batch={config.INFERENCE_BATCH_SIZE}  img_size={config.INFERENCE_IMG_SIZE}")
+
+    dice_vals, iou_vals, hd_vals = [], [], []
+
+    with torch.no_grad():
+        for i, (image, mask) in enumerate(loader):
             image = image.to(config.DEVICE)
             mask = mask.to(config.DEVICE)
 
-            pred_prob = predict_probabilities(model, image, use_tta=use_tta)
-            pred = probabilities_to_mask(pred_prob, threshold, config=config)
+            prob = predict_probabilities(model, image, use_tta=use_tta)
+            pred = probabilities_to_mask(prob, threshold, config=config)
 
-            dc = dice_coef(pred, mask, from_logits=False)
-            iou = iou_score(pred, mask, from_logits=False)
-            hd = hausdorff_95(pred, mask, from_logits=False)
-
-            avg_dice += dc
-            avg_iou += iou
-            avg_hd95 += hd
+            for b in range(pred.shape[0]):
+                p = pred[b:b + 1]
+                m = mask[b:b + 1]
+                dice_vals.append(dice_coef(p, m, from_logits=False))
+                iou_vals.append(iou_score(p, m, from_logits=False))
+                hd_vals.append(hausdorff_95(p, m, from_logits=False))
 
             if i % 50 == 0:
-                print(f"Img {i}: Dice={dc:.4f}, IOU={iou:.4f}, HD95={hd:.2f}")
+                last_d = dice_vals[-1] if dice_vals else 0
+                last_i = iou_vals[-1] if iou_vals else 0
+                last_h = hd_vals[-1] if hd_vals else 0
+                print(f"  batch {i}: dice={last_d:.4f} iou={last_i:.4f} hd95={last_h:.2f}")
 
-    n = len(test_loader)
-    print("\n" + "="*30)
-    print(f"FINAL RESULTS")
-    print("="*30)
-    print(f"Mean Dice: {avg_dice/n:.4f}")
-    print(f"Mean IoU : {avg_iou/n:.4f}")
-    print(f"Mean HD95: {avg_hd95/n:.4f} px")
-    print("="*30)
+    def stats(name, vals):
+        a = np.asarray(vals, dtype=np.float64)
+        return {
+            'metric': name,
+            'mean': float(a.mean()),
+            'std': float(a.std(ddof=1) if len(a) > 1 else 0.0),
+            'ci95': float(_ci95(vals)),
+            'min': float(a.min()),
+            'max': float(a.max()),
+            'median': float(np.median(a)),
+            'n': len(a),
+        }
+
+    results = [stats('Dice', dice_vals), stats('IoU', iou_vals), stats('HD95', hd_vals)]
+
+    print("\n" + "=" * 60)
+    print("RESULTS")
+    print("=" * 60)
+    print(f"{'metric':<8} {'mean':>8} {'±95%CI':>10} {'std':>8} {'median':>8} {'min':>8} {'max':>8}  n")
+    for r in results:
+        print(f"{r['metric']:<8} {r['mean']:>8.4f} {r['ci95']:>10.4f} {r['std']:>8.4f} "
+              f"{r['median']:>8.4f} {r['min']:>8.4f} {r['max']:>8.4f}  {r['n']}")
+    print("=" * 60)
+
+    if measure_speed:
+        fps = measure_fps(model, config)
+        print(f"\nInference speed @ {config.INFERENCE_IMG_SIZE}x{config.INFERENCE_IMG_SIZE}, batch=1:")
+        print(f"  {fps['ms_per_image']:.2f} ms/image   ({fps['fps']:.2f} FPS)   "
+              f"over {fps['n_iters']} iters on {fps['device']}")
+
+    return results
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--path', type=str, default='./checkpoints/best_dice_model.pth', help='Path to .pth model')
-    parser.add_argument('--use-tta', action='store_true', help='Enable Test Time Augmentation')
-    parser.add_argument('--batch-size', type=int, default=None, help='Batch size (None uses config default)')
-    parser.add_argument('--img-size', type=int, default=None, help='Image size (None uses config default)')
+    parser.add_argument('--path', type=str, default='./checkpoints/best_dice_model.pth')
+    parser.add_argument('--use-tta', action='store_true')
+    parser.add_argument('--batch-size', type=int, default=None)
+    parser.add_argument('--img-size', type=int, default=None)
+    parser.add_argument('--measure-speed', action='store_true',
+                        help='Time forward passes and report ms/image + FPS')
+    parser.add_argument('--img-dir', type=str, default=None,
+                        help='Override images directory (for cross-dataset eval)')
+    parser.add_argument('--mask-dir', type=str, default=None,
+                        help='Override masks directory')
     args = parser.parse_args()
 
-    evaluate(args.path, use_tta=args.use_tta, batch_size=args.batch_size, img_size=args.img_size)
+    evaluate(
+        args.path,
+        use_tta=args.use_tta,
+        batch_size=args.batch_size,
+        img_size=args.img_size,
+        measure_speed=args.measure_speed,
+        img_dir=args.img_dir,
+        mask_dir=args.mask_dir,
+    )
