@@ -2,7 +2,7 @@
   "timestamp_utc": "2026-06-15T19:14:37.529182+00:00",
   "device": "cuda",
   "cuda_available": true,
-  "gpu_name": "NVIDIA GeForce GTX 1650 Ti",
+  "gpu_name": "Tesla T4",
   "n_train": 800,
   "n_val": 100,
   "n_test": 100,
