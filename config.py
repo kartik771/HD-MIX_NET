@@ -90,6 +90,7 @@ class Config:
     WARMUP_EPOCHS = 5
     WEIGHT_DECAY = 1e-4
     GRAD_CLIP_NORM = 1.0
+    #--Code Change in progress--#
 
     # -------------------------------------------------------- losses
     # Concrete lambda values (the thesis was missing these numerical values
